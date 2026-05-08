@@ -1,0 +1,11 @@
+logging
+requests
+fastapi
+uvicorn
+python-multipart
+insightface
+onnxruntime
+opencv-python-headless
+numpy
+pydantic-settings
+python-dotenv
