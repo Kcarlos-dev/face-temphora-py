@@ -1,65 +1,22 @@
 import json
 import logging
-import threading
-from pathlib import Path
 from typing import Any
 
 import numpy as np
 
-logger = logging.getLogger(__name__)
+from app.database.models.select_embedding import select_embedding
 
-REFERENCE_PATH = Path(__file__).resolve().parent.parent / "data" / "reference_face.json"
+logger = logging.getLogger(__name__)
 
 DEFAULT_THRESHOLD = 0.42
 
-_reference_cache: dict[str, Any] | None = None
-_reference_lock = threading.Lock()
+
+class NoCandidatesError(Exception):
+    """A empresa não tem colaboradores com embedding cadastrado."""
 
 
-class ReferenceNotLoadedError(Exception):
-    """A referência não pôde ser carregada (arquivo ausente ou inválido)."""
-
-
-def _load_reference() -> dict[str, Any]:
-    if not REFERENCE_PATH.exists():
-        raise ReferenceNotLoadedError(
-            f"Arquivo de referência não encontrado: {REFERENCE_PATH}"
-        )
-
-    with REFERENCE_PATH.open("r", encoding="utf-8") as fh:
-        data = json.load(fh)
-
-    embedding = np.asarray(data.get("embedding", []), dtype=np.float32)
-    if embedding.size == 0:
-        raise ReferenceNotLoadedError("Referência sem campo 'embedding'.")
-
-    norm = float(np.linalg.norm(embedding))
-    if norm == 0.0:
-        raise ReferenceNotLoadedError("Embedding de referência tem norma zero.")
-    if abs(norm - 1.0) > 1e-3:
-        logger.warning(
-            "Referência não estava L2-normalizada (||v||=%.4f); normalizando.", norm
-        )
-        embedding = embedding / norm
-
-    return {
-        "name": data.get("name", "referencia"),
-        "filename": data.get("filename"),
-        "model": data.get("model"),
-        "embedding": embedding,
-        "embedding_dim": int(embedding.shape[0]),
-    }
-
-
-def get_reference() -> dict[str, Any]:
-    """Carrega e cacheia a referência (singleton thread-safe)."""
-    global _reference_cache
-    if _reference_cache is not None:
-        return _reference_cache
-    with _reference_lock:
-        if _reference_cache is None:
-            _reference_cache = _load_reference()
-    return _reference_cache
+class DatabaseError(Exception):
+    """Falha ao consultar os embeddings no banco."""
 
 
 def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
@@ -71,23 +28,100 @@ def cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (na * nb))
 
 
-def compare_to_reference(
+def _extract_embedding_array(values: Any) -> list | None:
+    """Aceita formato novo (lista plana de floats) E formato antigo
+    (lista de dicts com chave 'embedding'). Retorna a lista plana ou None."""
+    if not isinstance(values, list) or not values:
+        return None
+
+    if isinstance(values[0], dict):
+        first = values[0]
+        inner = first.get("embedding")
+        if not isinstance(inner, list) or not inner:
+            return None
+        return inner
+
+    if all(isinstance(v, (int, float)) for v in values):
+        return values
+
+    return None
+
+
+def _parse_db_row(row: dict) -> tuple[int, np.ndarray] | None:
+    """Converte uma linha do banco em (id_colaborador, embedding_array).
+
+    Tolera registros sem embedding ('{}', '[]', NULL) e formato legado
+    (lista de dicts contendo o vetor em `embedding`).
+    """
+    raw = row.get("embedding")
+    if not raw:
+        return None
+
+    try:
+        values = json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        logger.warning(
+            "Embedding com JSON inválido para colaborador id=%s.", row.get("id")
+        )
+        return None
+
+    flat = _extract_embedding_array(values)
+    if flat is None:
+        return None
+
+    try:
+        emb = np.asarray(flat, dtype=np.float32)
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "Embedding inválido para colaborador id=%s: %s", row.get("id"), exc
+        )
+        return None
+
+    if emb.size == 0:
+        return None
+    return int(row["id"]), emb
+
+
+def find_best_match(
     candidate_embedding: list[float] | np.ndarray,
+    id_empresa: int,
     threshold: float = DEFAULT_THRESHOLD,
 ) -> dict[str, Any]:
-    ref = get_reference()
-    candidate = np.asarray(candidate_embedding, dtype=np.float32)
+    """Compara o candidato com todos os colaboradores da empresa.
 
-    if candidate.shape != ref["embedding"].shape:
-        raise ValueError(
-            f"Dimensão do embedding candidato ({candidate.shape}) "
-            f"difere da referência ({ref['embedding'].shape})."
+    Retorna o colaborador com maior similaridade. `match` é True se
+    a similaridade ultrapassa o threshold.
+    """
+    rows = select_embedding(id_empresa)
+    if rows is False:
+        raise DatabaseError("Falha ao consultar colaboradores no banco.")
+    parsed = [p for p in (_parse_db_row(r) for r in rows) if p is not None]
+    if not parsed:
+        raise NoCandidatesError(
+            f"Nenhum colaborador da empresa {id_empresa} tem embedding cadastrado."
         )
 
-    similarity = cosine_similarity(candidate, ref["embedding"])
+    candidate = np.asarray(candidate_embedding, dtype=np.float32)
+
+    best_id = -1
+    best_sim = -1.0
+    for col_id, emb in parsed:
+        if emb.shape != candidate.shape:
+            logger.warning(
+                "Dimensão divergente para colaborador id=%s: %s vs %s",
+                col_id, emb.shape, candidate.shape,
+            )
+            continue
+        sim = cosine_similarity(candidate, emb)
+        if sim > best_sim:
+            best_sim = sim
+            best_id = col_id
+
     return {
-        "match": similarity >= threshold,
-        "similarity": similarity,
+        "match": best_sim >= threshold,
+        "similarity": best_sim,
         "threshold": threshold,
-        "reference_name": ref["name"],
+        "id_colaborador": best_id if best_sim >= threshold else None,
+        "best_id_colaborador": best_id,
+        "candidates_count": len(parsed),
     }
