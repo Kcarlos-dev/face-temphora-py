@@ -1,0 +1,53 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.egg-info
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# venv
+venv/
+.venv/
+env/
+
+# Editor / IDE
+.vscode/
+.idea/
+.cursor/
+*.swp
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Configs locais (segredos via env vars no Cloud Run / env_file no compose)
+.env
+.env.local
+*.log
+
+# Docs / build artifacts
+README.md
+*.md
+docs/
+dist/
+build/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Modelos baixados localmente (vão ser baixados durante o build)
+.insightface/
+
+# Dados sensíveis
+secrets/
+*.pem
