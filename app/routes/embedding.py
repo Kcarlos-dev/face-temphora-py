@@ -1,19 +1,23 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, File, UploadFile
 
-from app.controllers.controller_embedding import ControllerEmbedding
+from app.routes._upload_pipeline import upload_to_faces
 
 router = APIRouter(prefix="/embedding", tags=["embedding"])
 
 
-def get_controller() -> ControllerEmbedding:
-    return ControllerEmbedding()
-
-
 @router.get("")
-def get_embedding(controller: ControllerEmbedding = Depends(get_controller)):
-    return controller.get_embedding()
+def get_embedding():
+    return {"message": "Hello, World!"}
 
 
 @router.post("")
-def post_embedding(controller: ControllerEmbedding = Depends(get_controller)):
-    return controller.post_embedding()
+async def post_embedding(
+    file: UploadFile = File(..., description="Imagem (jpg, png, webp, heic, heif)"),
+):
+    faces = await upload_to_faces(file)
+    return {
+        "faces": [
+            {"embedding": f["embedding"], "det_score": f["det_score"]}
+            for f in faces
+        ],
+    }

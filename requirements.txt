@@ -9,3 +9,5 @@ opencv-python-headless
 numpy
 pydantic-settings
 python-dotenv
+Pillow
+pillow-heif
