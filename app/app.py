@@ -1,9 +1,9 @@
 from fastapi import FastAPI
+from logger_setup import logging
 
 from app.routes.index import index_router
 
 # uvicorn app.app:app --host 0.0.0.0 --port 5011
-
 
 def create_app() -> FastAPI:
     app = FastAPI()
