@@ -21,7 +21,7 @@ async def post_embedding(
         ],
     }
     embedding = embedding["faces"]  
-    print(embedding)
+
     is_success = update_embedding(embedding, id_colaborador)
     return {
         "is_success": is_success,
